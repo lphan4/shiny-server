@@ -1,0 +1,201 @@
+library(shiny)
+library(DT)
+library(shinyjs)
+library(digest)
+library(rsconnect)
+# library(googlesheets)
+# library(rdrop2)
+# library(httr)
+# library(googledrive)
+# library(googlesheets4)
+
+#etc
+# Clear workspace
+rm(list = ls())
+options(warn = -1)
+
+# specify directory to store responses
+responses <- c("C:/Users/Lawrence Phan/OneDrive - ACIL ALLEN CONSULTING PTY LTD/Documents/Shiny app/Responses")
+
+
+# fields we want
+fieldsAll <- c("client.name", 
+               "feedback", 
+               "experience", 
+               "rate_service", 
+               "successful", 
+               "proj_requirements", 
+               "org_type")
+
+# directory to use to store all the responses
+# create a responses directory so that the saved responses go there
+responsesDir <- file.path(responses)
+
+# time stamp their response
+epochTime <- function() {
+  as.integer(Sys.time())
+}
+
+# more humanised time stamp
+humanTime <- function() format(Sys.time(), "%Y%m%d-%H%M%OS")
+
+# vector for mandatory fields
+fieldsMandatory <- c("client.name", "feedback")
+
+# add an asterisk to an input label
+labelMandatory <- function(label) {
+  tagList(
+    label,
+    span("*", class = "mandatory_star")
+  )
+}
+
+# make asterisk red 
+appCSS <- ".mandatory_star { color: red; }"
+
+# options(httr_oob_default=TRUE) 
+# drive_auth(use_oob=TRUE)
+
+
+
+shinyApp(
+  ui = fluidPage(
+    
+    shinyjs::useShinyjs(),
+    shinyjs::inlineCSS(appCSS),
+    
+    # title
+    
+    div(
+      
+      id = "form",
+      tags$img(src='dd.PNG',style = "float:right; max-height: 100%; max-width: 100%;display: block;"),
+      h1("[DEMO] Project Name - Online form", style = "color:white"),
+      h4("This online survey was created by",
+         a(href = "https://www.acilallen.com.au/services/data-science",
+           "ACIL Allen's Data Science Group (DSG).", style = "color:#ffcc66"), style = "color:white"
+      ),
+      style = "background-color: #9757a6; height:100px"
+    ),
+    
+    div(
+      # image
+      tags$img(src='gantt2.PNG'),
+      
+      ## rest of code
+      div(
+        
+        h5("Please fill out the following form:"),
+        
+        # prompt user to input - MANDATORY
+        textAreaInput("client.name", labelMandatory("Name"), "", width = "1150px"),
+        textAreaInput("feedback", labelMandatory("Please provide your feedback"), rows = 5, width = "1150px"),
+        
+        # check box
+        checkboxInput("experience", "Did the project deliver its intended outcome?", FALSE),
+        
+        #slider colour
+        tags$style(HTML(".js-irs-0 .irs-single, .js-irs-0 .irs-bar-edge, .js-irs-0 .irs-bar {background: #9757a6; border:#9757a6}")),
+        tags$style(HTML(".js-irs-1 .irs-single, .js-irs-1 .irs-bar-edge, .js-irs-1 .irs-bar {background: #9757a6; border:#9757a6}")),
+        tags$style(HTML(".js-irs-2 .irs-single, .js-irs-2 .irs-bar-edge, .js-irs-2 .irs-bar {background: #9757a6; border:#9757a6}")),
+        
+        # slider 1
+        sliderInput("rate_service", "Please rate our service on a scale of 0-10", 0, 10, 2, ticks = FALSE, width = "100%"),
+        
+        # slider 2
+        sliderInput("successful", "Do you think the project will be successful?", 0, 10, 2, ticks = FALSE, width = "100%"),
+        
+        # slider 3
+        sliderInput("proj_requirements", "ACIL Allen understands the project requirements", 0, 10, 2, ticks = FALSE, width = "100%"),
+        
+        # select option
+        selectInput("org_type", 
+                    "Please specify your organisation type",
+                    c("",  "Private", "Public", "Non-for-profit")),
+        actionButton("submit",style = "background:#f8ac3d; border:#f8ac3d", "Submit", class = "btn-primary" )
+      ),style = "display:inline-block; padding:0px; margin: 0px"
+    ),
+    
+    # thank you message once user submitted form.
+    shinyjs::hidden(
+      div(
+        id = "thankyou_msg",
+        h3("Thanks, your response was submitted successfully!"),
+        actionLink("submit_another", "Submit another response")
+      )
+    )
+  ),
+  server = function(input, output, session) {
+    
+    output$table <- DT::renderDataTable(test.table,
+                                        options = list(dom = 't'),
+                                        rownames = FALSE)
+    
+    # make sure the user can't submit WITHOUT completing the mandatory fields
+    # this enables/disables the submit button based on conditions
+    # the condition is obviously whether the mandatory fields have been filled
+    # loop through the mandatory fields and check their values
+    # Enable the Submit button when all mandatory fields are filled out
+    observe({
+      mandatoryFilled <-
+        vapply(fieldsMandatory,
+               function(x) {
+                 !is.null(input[[x]]) && input[[x]] != ""
+               },
+               logical(1))
+      mandatoryFilled <- all(mandatoryFilled)
+      
+      shinyjs::toggleState(id = "submit", condition = mandatoryFilled)
+    })
+    
+    # gather all the form data into a format that can be saved into a csv
+    # loop over the input fields
+    formData <- reactive({
+      data <- sapply(fieldsAll, function(x) input[[x]])
+      data <- c(data, timestamp = epochTime())
+      data <- t(data) # 1 row = 1 observation = 1 user submission
+      data
+    })
+    
+    # action to save data (i.e how data is stored/retrieved)
+    saveData <- function(data) {
+      
+      # create a unique file name
+      fileName <- sprintf("%s_%s.csv", humanTime(), digest::digest(data))
+      
+      # write the file to a local system
+      write.csv(x = data, file = file.path(responsesDir, fileName), row.names = FALSE, quote = TRUE)
+    }
+    
+    # action to load data
+    loadData <- function () {
+      files <- list.files(file.path(responsesDir), full.names = TRUE)
+      data <- lapply(files, read.csv, stringAsFactors = FALSE)
+      data <- dplyr::rbind_all(data)
+      data
+    }
+    
+    # action to take when submit button is pressed
+    observeEvent(input$submit, {
+      saveData(formData())
+    })
+    
+    # action to take when submit button is pressed
+    observeEvent(input$submit, {
+      saveData(formData())
+      shinyjs::reset("form")
+      shinyjs::hide("form")
+      shinyjs::show("thankyou_msg")
+    })
+    
+    # action to allow user to submit another response! - hides the thank you messaage and shows the form as intended.
+    observeEvent(input$submit_another, {
+      shinyjs::show("form")
+      shinyjs::hide("thankyou_msg")
+    }) 
+    
+    
+  }
+)
+
+
